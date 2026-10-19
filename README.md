@@ -14,7 +14,7 @@ Para iniciar o servidor de teste, abrir as portas e responder às mensagens MOS 
 .\TcpPortDoctor.exe --listen --bind 0.0.0.0 --seconds 120 --pause
 ```
 
-O servidor responde a `heartbeat` com `heartbeat`, responde a `reqMachInfo` com `listMachInfo`, aceita `listMachInfo` e descarta `keepAlive` sem resposta, conforme MOS 4.0.
+O servidor responde a `heartbeat` com `heartbeat`, responde a `reqMachInfo` com `listMachInfo`, aceita `listMachInfo` e descarta `keepAlive` sem resposta. Também aceita as grafias legadas `heartBeat`, `reqMachineInfo` e `keepalive` para diagnóstico de implementações antigas.
 
 Enquanto o primeiro computador estiver escutando, copie o executável para outro computador e teste a entrada pela rede:
 
@@ -28,7 +28,13 @@ Para validar o protocolo, e não somente a conexão TCP:
 .\TcpPortDoctor.exe --mos-test 192.168.1.50 --ports 10540,10541 --pause
 ```
 
-Esse teste envia `keepAlive`, envia e valida a resposta de `heartbeat`, envia `reqMachInfo` e valida `listMachInfo` com `mosProfile number="0"`. O XML completo enviado e recebido é gravado no log.
+Esse teste envia `keepAlive`, envia e valida a resposta de `heartbeat`, envia `reqMachInfo` e valida `listMachInfo` com Profile 0. O XML completo enviado e recebido é gravado no log.
+
+Para testar uma versão específica e seu formato exato:
+
+```powershell
+.\TcpPortDoctor.exe --mos-test 192.168.1.50 --mos-version 2.8.3 --pause
+```
 
 O servidor de teste se identifica no `listMachInfo` como:
 
@@ -52,6 +58,7 @@ Troque `192.168.1.50` pelo IP real da máquina que está executando `--listen`.
 - conexões recebidas e XML MOS durante a janela de monitoramento;
 - codificação MOS UCS-2/UTF-16 big-endian, com detecção tolerante de UTF-8 e UTF-16 little-endian;
 - respostas `heartbeat` e `listMachInfo` do Profile 0;
+- estruturas de resposta específicas para MOS 2.6, toda a família 2.8.x e MOS 4.0;
 - DNS, tempo de conexão e códigos detalhados de erro no modo cliente.
 
 ## Interpretação básica
@@ -72,6 +79,7 @@ O utilitário não modifica o Firewall. Se o `bind` e o autoteste local passarem
 TcpPortDoctor.exe --listen [--bind IP] [--ports LISTA] [--seconds N]
 TcpPortDoctor.exe --connect HOST [--ports LISTA] [--timeout MS]
 TcpPortDoctor.exe --mos-test HOST [--ports LISTA] [--timeout MS]
+TcpPortDoctor.exe --self-test
 
 --bind IP       IP local; padrão 0.0.0.0
 --ports LISTA   padrão 10540,10541,10542
@@ -80,6 +88,7 @@ TcpPortDoctor.exe --mos-test HOST [--ports LISTA] [--timeout MS]
 --mos-id ID     identificador MOS usado nos XMLs
 --ncs-id ID     identificador NCS usado nos XMLs
 --device-type   tipo anunciado: MOS ou NCS
+--mos-version   auto, 2.6, 2.8.0, 2.8.1, 2.8.2, 2.8.3, 2.8.4, 2.8.5 ou 4.0
 --pause         aguarda ENTER ao terminar
 --no-pause      não aguarda ENTER
 --help          exibe ajuda
@@ -88,6 +97,25 @@ TcpPortDoctor.exe --mos-test HOST [--ports LISTA] [--timeout MS]
 Pelo padrão, Profile 0 trafega nas portas 10540 e 10541. A porta 10542 é destinada à família `mosReqObjList`; o programa permite testá-la para diagnóstico, mas registra essa diferença no log.
 
 ## Compatibilidade
+
+O modo `--mos-version auto` é o padrão do servidor. Ele escolhe MOS 2.6 quando a primeira mensagem não contém `messageID`, MOS 4.0 quando recebe `keepAlive` e MOS 2.8.5 nas demais mensagens com `messageID`, mantendo essa escolha durante a conexão. Como `heartbeat` e `reqMachInfo` não carregam um número de versão, não existe negociação confiável entre todas as revisões 2.8; use `--mos-version` quando o equipamento exigir validação rígida por DTD/XSD. Em particular, MOS 2.8.0 e MOS 2.6 são indistinguíveis pelo envelope, portanto o 2.8.0 precisa ser selecionado explicitamente.
+
+| Opção | Resposta `listMachInfo` | `messageID` |
+|---|---|---|
+| `2.6` | sem campos de profile | não |
+| `2.8.0` | `mosProfile0` a `mosProfile6` | não |
+| `2.8.1` | `mosProfile0` a `mosProfile6` | sim |
+| `2.8.2` / `2.8.3` | `mosProfile0` a `mosProfile7` | sim |
+| `2.8.4` / `2.8.5` | `supportedProfiles` com profiles 0–7 | sim |
+| `4.0` | `supportedProfiles` com profiles 0–7 e suporte a `keepAlive` | sim, exceto `keepAlive` |
+
+Valide todos os geradores de resposta localmente com:
+
+```powershell
+.\TcpPortDoctor.exe --self-test --no-pause
+```
+
+O MOS 3.x é uma família diferente: o Profile 0 oficial usa Web Services HTTP/SOAP, não o socket TCP clássico. Ao detectar uma requisição HTTP no listener, o programa registra essa diferença claramente no log; ele não se anuncia como servidor SOAP 3.x.
 
 Compilado como `AnyCPU` para .NET Framework 4.x, normalmente já presente no Windows 10/11 e Windows Server modernos. O executável não é assinado digitalmente; o Windows pode exibir um aviso de origem desconhecida ao copiá-lo para outra máquina.
 
@@ -103,7 +131,7 @@ O script localiza o compilador C# do .NET Framework e cria `dist\TcpPortDoctor.e
 
 ## GitHub Actions
 
-O workflow `.github/workflows/build.yml` compila o projeto em `windows-latest` a cada push na branch `main`, em pull requests e por acionamento manual. Ao final, o executável fica disponível como artifact chamado `TcpPortDoctor-windows` na execução do GitHub Actions.
+O workflow `.github/workflows/build.yml` compila o projeto em `windows-latest`, executa `--self-test` para todas as variantes e publica o artifact `TcpPortDoctor-windows` a cada push na branch `main`, em pull requests e por acionamento manual.
 
 ## Privacidade dos logs
 
@@ -112,4 +140,8 @@ Os logs podem conter nome da máquina e do usuário, endereços IP, interfaces d
 ## Referências
 
 - [MOS Protocol 4.0](https://mosprotocol.com/wp-content/MOS-Protocol-Documents/MOSProtocolVersion40/index.html)
+- [MOS Protocol 3.8.4 — transporte HTTP/Web Services](https://mosprotocol.com/wp-content/MOS-Protocol-Documents/MOS-Protocol-3.8.4-Current.htm)
+- [MOS Protocol 2.8.4](https://mosprotocol.com/wp-content/MOS-Protocol-Documents/MOS-Protocol-2.8.4-Current.htm)
+- [MOS Protocol 2.8](https://mosprotocol.com/wp-content/MOS-Protocol-Documents/MOS-v28-510.htm)
+- [MOS Protocol 2.6](https://mosprotocol.com/wp-content/MOS-Protocol-Documents/mosv26.htm)
 - [Versões oficiais do MOS Protocol](https://mosprotocol.com/current-version/)

@@ -23,6 +23,10 @@ jobs:
         shell: pwsh
         run: ./build.ps1
 
+      - name: Validate MOS Profile 0 compatibility
+        shell: pwsh
+        run: ./dist/TcpPortDoctor.exe --self-test --no-pause
+
       - name: Show executable checksum
         shell: pwsh
         run: Get-FileHash -Algorithm SHA256 ./dist/TcpPortDoctor.exe | Format-List

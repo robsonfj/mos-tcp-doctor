@@ -14,11 +14,11 @@ using System.Threading;
 using System.Xml;
 
 [assembly: AssemblyTitle("TcpPortDoctor")]
-[assembly: AssemblyDescription("Diagnostico de portas TCP para Windows")]
-[assembly: AssemblyCompany("TestCompany")]
+[assembly: AssemblyDescription("Diagnostico de portas TCP e MOS Profile 0 para Windows")]
+[assembly: AssemblyCompany("TCP_DOCTOR")]
 [assembly: AssemblyProduct("TcpPortDoctor")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
 
 namespace TcpPortDoctor
 {
@@ -26,7 +26,21 @@ namespace TcpPortDoctor
     {
         Listen,
         Connect,
-        MosProfile0Test
+        MosProfile0Test,
+        SelfTest
+    }
+
+    internal enum MosCompatibilityMode
+    {
+        Auto,
+        Mos26,
+        Mos280,
+        Mos281,
+        Mos282,
+        Mos283,
+        Mos284,
+        Mos285,
+        Mos40
     }
 
     internal sealed class Options
@@ -40,6 +54,7 @@ namespace TcpPortDoctor
         public string MosId = "tcp-port-doctor.mos";
         public string NcsId = "tcp-port-doctor.ncs";
         public string DeviceType = "MOS";
+        public MosCompatibilityMode MosCompatibility = MosCompatibilityMode.Auto;
         public bool NoPause;
         public bool Help;
         public bool Interactive;
@@ -182,6 +197,12 @@ namespace TcpPortDoctor
 
         private void DetectEncoding()
         {
+            if (buffer.Count >= 4 &&
+                ((buffer[0] == (byte)'P' && buffer[1] == (byte)'O' && buffer[2] == (byte)'S' && buffer[3] == (byte)'T') ||
+                 (buffer[0] == (byte)'G' && buffer[1] == (byte)'E' && buffer[2] == (byte)'T' && buffer[3] == (byte)' ')))
+            {
+                throw new InvalidDataException("Trafego HTTP/SOAP detectado. MOS 3.x Profile 0 usa Web Services HTTP, nao o transporte socket MOS 2.x/4.0 deste listener.");
+            }
             if (encoding != null || buffer.Count < 2)
             {
                 return;
@@ -411,9 +432,13 @@ namespace TcpPortDoctor
                 {
                     exitCode = RunConnectTest(options);
                 }
-                else
+                else if (options.Mode == OperationMode.MosProfile0Test)
                 {
                     exitCode = RunMosProfile0Test(options);
+                }
+                else
+                {
+                    exitCode = RunCompatibilitySelfTest(options);
                 }
 
                 Log.Section("RESULTADO FINAL");
@@ -462,7 +487,7 @@ namespace TcpPortDoctor
         private static void PrintBanner()
         {
             Console.WriteLine("============================================================");
-            Console.WriteLine(" TcpPortDoctor 1.1 - TCP + MOS Profile 0 no Windows");
+            Console.WriteLine(" TcpPortDoctor 1.2 - TCP + MOS Profile 0 no Windows");
             Console.WriteLine("============================================================");
         }
 
@@ -514,6 +539,10 @@ namespace TcpPortDoctor
                 else if (argument == "--mos-server")
                 {
                     options.Mode = OperationMode.Listen;
+                }
+                else if (argument == "--self-test")
+                {
+                    options.Mode = OperationMode.SelfTest;
                 }
                 else if (argument == "--bind")
                 {
@@ -595,6 +624,18 @@ namespace TcpPortDoctor
                     }
                     options.DeviceType = value;
                 }
+                else if (argument == "--mos-version")
+                {
+                    if (!TryTakeValue(args, ref index, argument, out value, out error))
+                    {
+                        return false;
+                    }
+                    if (!TryParseMosCompatibility(value, out options.MosCompatibility))
+                    {
+                        error = "Valor invalido para --mos-version. Use auto, 2.6, 2.8.0, 2.8.1, 2.8.2, 2.8.3, 2.8.4, 2.8.5 ou 4.0.";
+                        return false;
+                    }
+                }
                 else if (argument == "--pause")
                 {
                     options.NoPause = false;
@@ -615,6 +656,26 @@ namespace TcpPortDoctor
                 options.Ports = new int[] { 10540, 10541 };
             }
 
+            return true;
+        }
+
+        private static bool TryParseMosCompatibility(string value, out MosCompatibilityMode mode)
+        {
+            string normalized = (value ?? "").Trim().ToLowerInvariant();
+            if (normalized == "auto") mode = MosCompatibilityMode.Auto;
+            else if (normalized == "2.6" || normalized == "26") mode = MosCompatibilityMode.Mos26;
+            else if (normalized == "2.8.0" || normalized == "2.8") mode = MosCompatibilityMode.Mos280;
+            else if (normalized == "2.8.1" || normalized == "2.8-legacy" || normalized == "28-legacy") mode = MosCompatibilityMode.Mos281;
+            else if (normalized == "2.8.2") mode = MosCompatibilityMode.Mos282;
+            else if (normalized == "2.8.3") mode = MosCompatibilityMode.Mos283;
+            else if (normalized == "2.8.4") mode = MosCompatibilityMode.Mos284;
+            else if (normalized == "2.8.5" || normalized == "2.8-modern" || normalized == "28-modern") mode = MosCompatibilityMode.Mos285;
+            else if (normalized == "4.0" || normalized == "40" || normalized == "4") mode = MosCompatibilityMode.Mos40;
+            else
+            {
+                mode = MosCompatibilityMode.Auto;
+                return false;
+            }
             return true;
         }
 
@@ -740,6 +801,9 @@ namespace TcpPortDoctor
             Console.WriteLine("  TcpPortDoctor.exe --mos-test HOST [--ports LISTA] [--timeout MS]");
             Console.WriteLine("      Envia keepAlive, heartbeat e reqMachInfo; valida heartbeat e listMachInfo.");
             Console.WriteLine();
+            Console.WriteLine("  TcpPortDoctor.exe --self-test");
+            Console.WriteLine("      Valida internamente todas as variantes de compatibilidade do Profile 0.");
+            Console.WriteLine();
             Console.WriteLine("OPCOES:");
             Console.WriteLine("  --bind IP       IP local; padrao 0.0.0.0 (todas as interfaces IPv4)");
             Console.WriteLine("  --ports LISTA   Padrao 10540,10541,10542");
@@ -749,6 +813,7 @@ namespace TcpPortDoctor
             Console.WriteLine("  --mos-id ID     Identificador MOS usado nos XMLs");
             Console.WriteLine("  --ncs-id ID     Identificador NCS usado nos XMLs");
             Console.WriteLine("  --device-type   Tipo anunciado no listMachInfo: MOS ou NCS");
+            Console.WriteLine("  --mos-version   auto (padrao), 2.6, 2.8.0 ... 2.8.5 ou 4.0");
             Console.WriteLine("  --pause          Aguarda ENTER no fim");
             Console.WriteLine("  --no-pause       Nao aguarda ENTER no fim");
             Console.WriteLine("  --help            Mostra esta ajuda");
@@ -758,13 +823,16 @@ namespace TcpPortDoctor
             Console.WriteLine("  TcpPortDoctor.exe --listen --bind 192.168.1.50 --ports 10540,10541,10542");
             Console.WriteLine("  TcpPortDoctor.exe --connect 192.168.1.50 --ports 10540,10541,10542");
             Console.WriteLine("  TcpPortDoctor.exe --mos-test 192.168.1.50 --ports 10540,10541");
+            Console.WriteLine("  TcpPortDoctor.exe --listen --mos-version 2.8-legacy --seconds 120");
+            Console.WriteLine("  TcpPortDoctor.exe --self-test");
         }
 
         private static void PrintConfiguration(Options options)
         {
             Log.Section("CONFIGURACAO EFETIVA");
             string modeDescription = options.Mode == OperationMode.Listen ? "SERVIDOR MOS PROFILE 0 / BIND" :
-                (options.Mode == OperationMode.Connect ? "CONECTAR TCP" : "CLIENTE DE TESTE MOS PROFILE 0");
+                (options.Mode == OperationMode.Connect ? "CONECTAR TCP" :
+                (options.Mode == OperationMode.MosProfile0Test ? "CLIENTE DE TESTE MOS PROFILE 0" : "AUTOTESTE DE COMPATIBILIDADE"));
             Log.Info("Modo: " + modeDescription);
             Log.Info("Portas: " + String.Join(", ", options.Ports.Select(delegate(int port) { return port.ToString(); }).ToArray()));
             if (options.Mode == OperationMode.Listen)
@@ -780,6 +848,7 @@ namespace TcpPortDoctor
             if (options.Mode == OperationMode.Listen || options.Mode == OperationMode.MosProfile0Test)
             {
                 Log.Info("MOS ID: " + options.MosId + "; NCS ID: " + options.NcsId + "; deviceType: " + options.DeviceType);
+                Log.Info("Compatibilidade MOS: " + MosCompatibilityName(options.MosCompatibility));
             }
         }
 
@@ -1207,6 +1276,7 @@ namespace TcpPortDoctor
                 NetworkStream stream = client.GetStream();
                 MosMessageReader reader = new MosMessageReader(stream);
                 DateTime lastHeartbeatResponse = DateTime.MinValue;
+                MosCompatibilityMode sessionCompatibility = options.MosCompatibility;
 
                 while (!serverState.Stopping && !cancelRequested && client.Connected)
                 {
@@ -1241,16 +1311,24 @@ namespace TcpPortDoctor
 
                     string requestMosId = GetNodeText(document, "/mos/mosID", options.MosId);
                     string requestNcsId = GetNodeText(document, "/mos/ncsID", options.NcsId);
-
-                    if (document.SelectSingleNode("/mos/keepAlive") != null)
+                    MosCompatibilityMode responseMode = ResolveCompatibility(document, sessionCompatibility);
+                    if (sessionCompatibility == MosCompatibilityMode.Auto)
                     {
-                        Log.Ok("PROFILE 0 keepAlive valido; conforme a especificacao, nenhuma resposta sera enviada.");
+                        sessionCompatibility = responseMode;
+                    }
+                    Log.Info("Variante Profile 0 selecionada para a resposta: " + MosCompatibilityName(responseMode) + ".");
+
+                    if (document.SelectSingleNode("/mos/keepAlive") != null || document.SelectSingleNode("/mos/keepalive") != null)
+                    {
+                        Log.Ok("PROFILE 0 keepAlive valido (incluindo grafia legada); nenhuma resposta sera enviada.");
                         continue;
                     }
 
-                    if (document.SelectSingleNode("/mos/heartbeat") != null)
+                    XmlNode heartbeatNode = document.SelectSingleNode("/mos/heartbeat") ?? document.SelectSingleNode("/mos/heartBeat");
+                    if (heartbeatNode != null)
                     {
-                        string receivedTime = GetNodeText(document, "/mos/heartbeat/time", "");
+                        XmlNode timeNode = heartbeatNode.SelectSingleNode("time");
+                        string receivedTime = timeNode == null ? "" : timeNode.InnerText.Trim();
                         if (String.IsNullOrWhiteSpace(receivedTime))
                         {
                             Log.Error("heartbeat invalido: elemento <time> obrigatorio ausente ou vazio.");
@@ -1264,15 +1342,15 @@ namespace TcpPortDoctor
                             continue;
                         }
 
-                        string response = BuildHeartbeat(requestMosId, requestNcsId);
+                        string response = BuildHeartbeat(requestMosId, requestNcsId, responseMode);
                         SendMosXml(stream, response, reader.Encoding, "heartbeat", remote);
                         lastHeartbeatResponse = DateTime.UtcNow;
                         continue;
                     }
 
-                    if (document.SelectSingleNode("/mos/reqMachInfo") != null)
+                    if (document.SelectSingleNode("/mos/reqMachInfo") != null || document.SelectSingleNode("/mos/reqMachineInfo") != null)
                     {
-                        string response = BuildListMachInfo(requestMosId, requestNcsId, options);
+                        string response = BuildListMachInfo(requestMosId, requestNcsId, options, responseMode);
                         SendMosXml(stream, response, reader.Encoding, "listMachInfo", remote);
                         lastHeartbeatResponse = DateTime.MinValue;
                         continue;
@@ -1280,7 +1358,8 @@ namespace TcpPortDoctor
 
                     if (document.SelectSingleNode("/mos/listMachInfo") != null)
                     {
-                        XmlNode profile = document.SelectSingleNode("/mos/listMachInfo/supportedProfiles/mosProfile[@number='0']");
+                        XmlNode profile = document.SelectSingleNode("/mos/listMachInfo/supportedProfiles/mosProfile[@number='0']") ??
+                            document.SelectSingleNode("/mos/listMachInfo/mosProfile0");
                         if (profile != null)
                         {
                             Log.Ok("PROFILE 0 listMachInfo recebido; perfil 0 anunciado como '" + profile.InnerText.Trim() + "'. Nenhuma resposta exigida.");
@@ -1369,11 +1448,16 @@ namespace TcpPortDoctor
                 NetworkStream stream = client.GetStream();
                 Encoding mosEncoding = new UnicodeEncoding(true, false, true);
                 MosMessageReader reader = new MosMessageReader(stream);
+                MosCompatibilityMode testMode = options.MosCompatibility == MosCompatibilityMode.Auto ? MosCompatibilityMode.Mos40 : options.MosCompatibility;
+                Log.Info("Cliente testara a variante: " + MosCompatibilityName(testMode) + ".");
 
-                SendMosXml(stream, BuildKeepAlive(options.MosId, options.NcsId), mosEncoding, "keepAlive", endpoint);
-                Log.Ok("keepAlive enviado; nenhuma resposta e esperada pelo MOS 4.0.");
+                if (testMode == MosCompatibilityMode.Mos40)
+                {
+                    SendMosXml(stream, BuildKeepAlive(options.MosId, options.NcsId), mosEncoding, "keepAlive", endpoint);
+                    Log.Ok("keepAlive enviado; nenhuma resposta e esperada pelo MOS 4.0.");
+                }
 
-                SendMosXml(stream, BuildHeartbeat(options.MosId, options.NcsId), mosEncoding, "heartbeat", endpoint);
+                SendMosXml(stream, BuildHeartbeat(options.MosId, options.NcsId, testMode), mosEncoding, "heartbeat", endpoint);
                 string heartbeatXml = reader.ReadNextMessage(null, options.TimeoutMilliseconds);
                 Log.Section("MOS RESPOSTA heartbeat DE " + endpoint);
                 Log.Info("Codificacao detectada na resposta: " + reader.EncodingDescription);
@@ -1386,7 +1470,7 @@ namespace TcpPortDoctor
                 }
                 Log.Ok("PROFILE 0 heartbeat VALIDADO na porta " + port + ".");
 
-                SendMosXml(stream, BuildReqMachInfo(options.MosId, options.NcsId), mosEncoding, "reqMachInfo", endpoint);
+                SendMosXml(stream, BuildReqMachInfo(options.MosId, options.NcsId, testMode), mosEncoding, "reqMachInfo", endpoint);
                 string machineInfoXml = reader.ReadNextMessage(null, options.TimeoutMilliseconds);
                 Log.Section("MOS RESPOSTA listMachInfo DE " + endpoint);
                 Log.Info("Codificacao detectada na resposta: " + reader.EncodingDescription);
@@ -1399,22 +1483,43 @@ namespace TcpPortDoctor
                     return false;
                 }
 
-                XmlNode profile = machineInfoDocument.SelectSingleNode("/mos/listMachInfo/supportedProfiles/mosProfile[@number='0']");
-                if (profile == null)
+                XmlNode profile = machineInfoDocument.SelectSingleNode("/mos/listMachInfo/supportedProfiles/mosProfile[@number='0']") ??
+                    machineInfoDocument.SelectSingleNode("/mos/listMachInfo/mosProfile0");
+                if (testMode != MosCompatibilityMode.Mos26 && profile == null)
                 {
-                    Log.Error("PROFILE 0 FALHOU: listMachInfo nao anuncia mosProfile number=\"0\".");
+                    Log.Error("PROFILE 0 FALHOU: listMachInfo nao anuncia Profile 0 no formato esperado.");
                     return false;
                 }
-                string profileValue = profile.InnerText.Trim().ToUpperInvariant();
-                if (profileValue != "YES" && profileValue != "TRUE" && profileValue != "1")
+                if (profile != null)
                 {
-                    Log.Error("PROFILE 0 FALHOU: mosProfile number=\"0\" tem valor nao afirmativo: '" + profile.InnerText.Trim() + "'.");
+                    string profileValue = profile.InnerText.Trim().ToUpperInvariant();
+                    if (profileValue != "YES" && profileValue != "TRUE" && profileValue != "1")
+                    {
+                        Log.Error("PROFILE 0 FALHOU: anuncio do Profile 0 tem valor nao afirmativo: '" + profile.InnerText.Trim() + "'.");
+                        return false;
+                    }
+                }
+                if (IsLegacy28(testMode) &&
+                    machineInfoDocument.SelectSingleNode("/mos/listMachInfo/mosProfile0") == null)
+                {
+                    Log.Error("PROFILE 0 FALHOU: a variante 2.8 legada exige mosProfile0 plano.");
+                    return false;
+                }
+                if ((IsModern28(testMode) || testMode == MosCompatibilityMode.Mos40) &&
+                    machineInfoDocument.SelectSingleNode("/mos/listMachInfo/supportedProfiles/mosProfile[@number='0']") == null)
+                {
+                    Log.Error("PROFILE 0 FALHOU: a variante moderna exige supportedProfiles/mosProfile.");
                     return false;
                 }
 
                 string manufacturer = GetNodeText(machineInfoDocument, "/mos/listMachInfo/manufacturer", "nao informado");
                 string model = GetNodeText(machineInfoDocument, "/mos/listMachInfo/model", "nao informado");
                 string revision = GetNodeText(machineInfoDocument, "/mos/listMachInfo/mosRev", "nao informado");
+                if (revision != MosRevision(testMode))
+                {
+                    Log.Error("PROFILE 0 FALHOU: mosRev esperado='" + MosRevision(testMode) + "', recebido='" + revision + "'.");
+                    return false;
+                }
                 Log.Ok("PROFILE 0 listMachInfo VALIDADO: fabricante='" + manufacturer + "', modelo='" + model + "', MOS rev='" + revision + "'.");
                 return true;
             }
@@ -1444,6 +1549,90 @@ namespace TcpPortDoctor
             }
         }
 
+        private static int RunCompatibilitySelfTest(Options options)
+        {
+            Log.Section("AUTOTESTE MOS PROFILE 0");
+            List<string> failures = new List<string>();
+            MosCompatibilityMode[] modes = new MosCompatibilityMode[]
+            {
+                MosCompatibilityMode.Mos26,
+                MosCompatibilityMode.Mos280,
+                MosCompatibilityMode.Mos281,
+                MosCompatibilityMode.Mos282,
+                MosCompatibilityMode.Mos283,
+                MosCompatibilityMode.Mos284,
+                MosCompatibilityMode.Mos285,
+                MosCompatibilityMode.Mos40
+            };
+
+            foreach (MosCompatibilityMode mode in modes)
+            {
+                try
+                {
+                    XmlDocument heartbeat = ParseMosXml(BuildHeartbeat(options.MosId, options.NcsId, mode));
+                    XmlDocument machineInfo = ParseMosXml(BuildListMachInfo(options.MosId, options.NcsId, options, mode));
+                    AssertSelfTest(heartbeat.SelectSingleNode("/mos/heartbeat/time") != null, mode, "heartbeat/time ausente", failures);
+                    AssertSelfTest((heartbeat.SelectSingleNode("/mos/messageID") != null) == UsesMessageId(mode), mode, "regra de messageID incorreta", failures);
+                    AssertSelfTest(GetNodeText(machineInfo, "/mos/listMachInfo/manufacturer", "") == "TCP_DOCTOR", mode, "manufacturer diferente de TCP_DOCTOR", failures);
+                    AssertSelfTest(GetNodeText(machineInfo, "/mos/listMachInfo/mosRev", "") == MosRevision(mode), mode, "mosRev incorreto", failures);
+
+                    if (mode == MosCompatibilityMode.Mos26)
+                    {
+                        AssertSelfTest(machineInfo.SelectSingleNode("/mos/messageID") == null, mode, "MOS 2.6 nao deve emitir messageID", failures);
+                        AssertSelfTest(machineInfo.SelectSingleNode("/mos/listMachInfo/mosProfile0") == null && machineInfo.SelectSingleNode("/mos/listMachInfo/supportedProfiles") == null, mode, "MOS 2.6 nao deve emitir campos de profiles", failures);
+                    }
+                    else if (IsLegacy28(mode))
+                    {
+                        AssertSelfTest(GetNodeText(machineInfo, "/mos/listMachInfo/mosProfile0", "") == "YES", mode, "mosProfile0 plano ausente", failures);
+                        bool shouldHaveProfile7 = mode == MosCompatibilityMode.Mos282 || mode == MosCompatibilityMode.Mos283;
+                        AssertSelfTest((machineInfo.SelectSingleNode("/mos/listMachInfo/mosProfile7") != null) == shouldHaveProfile7, mode, "presenca de mosProfile7 incorreta", failures);
+                        AssertSelfTest(machineInfo.SelectSingleNode("/mos/listMachInfo/supportedProfiles") == null, mode, "formato legado nao deve emitir supportedProfiles", failures);
+                    }
+                    else
+                    {
+                        XmlNodeList profiles = machineInfo.SelectNodes("/mos/listMachInfo/supportedProfiles/mosProfile");
+                        AssertSelfTest(profiles != null && profiles.Count == 8, mode, "supportedProfiles deve conter profiles 0-7", failures);
+                        AssertSelfTest(GetNodeText(machineInfo, "/mos/listMachInfo/supportedProfiles/mosProfile[@number='0']", "") == "YES", mode, "Profile 0 moderno ausente", failures);
+                    }
+
+                    Encoding wireEncoding = new UnicodeEncoding(true, false, true);
+                    string roundTrip = wireEncoding.GetString(wireEncoding.GetBytes(machineInfo.OuterXml));
+                    AssertSelfTest(roundTrip == machineInfo.OuterXml, mode, "round-trip UTF-16BE falhou", failures);
+                    if (!failures.Any(delegate(string failure) { return failure.StartsWith(MosCompatibilityName(mode) + ":", StringComparison.Ordinal); }))
+                    {
+                        Log.Ok("Autoteste passou: " + MosCompatibilityName(mode) + ".");
+                    }
+                }
+                catch (Exception exception)
+                {
+                    failures.Add(MosCompatibilityName(mode) + ": excecao " + exception.GetType().Name + " - " + exception.Message);
+                }
+            }
+
+            XmlDocument noMessageId = ParseMosXml("<mos><mosID>a</mosID><ncsID>b</ncsID><reqMachInfo/></mos>");
+            XmlDocument withMessageId = ParseMosXml("<mos><mosID>a</mosID><ncsID>b</ncsID><messageID>1</messageID><reqMachineInfo/></mos>");
+            XmlDocument keepAlive = ParseMosXml("<mos><mosID>a</mosID><ncsID>b</ncsID><keepalive/></mos>");
+            AssertSelfTest(ResolveCompatibility(noMessageId, MosCompatibilityMode.Auto) == MosCompatibilityMode.Mos26, MosCompatibilityMode.Auto, "deteccao sem messageID deveria escolher 2.6", failures);
+            AssertSelfTest(ResolveCompatibility(withMessageId, MosCompatibilityMode.Auto) == MosCompatibilityMode.Mos285, MosCompatibilityMode.Auto, "deteccao com messageID deveria escolher 2.8.5", failures);
+            AssertSelfTest(ResolveCompatibility(keepAlive, MosCompatibilityMode.Auto) == MosCompatibilityMode.Mos40, MosCompatibilityMode.Auto, "keepalive legado deveria escolher 4.0", failures);
+
+            if (failures.Count == 0)
+            {
+                Log.Ok("AUTOTESTE CONCLUIDO: todas as variantes TCP do MOS Profile 0 passaram.");
+                Log.Info("MOS 3.x nao entra neste teste: a especificacao usa HTTP/SOAP Web Services, e o listener informa esse transporte separadamente.");
+                return 0;
+            }
+
+            foreach (string failure in failures) Log.Error(failure);
+            Log.Error("AUTOTESTE FALHOU com " + failures.Count + " erro(s).");
+            return 1;
+        }
+
+        private static void AssertSelfTest(bool condition, MosCompatibilityMode mode, string message, List<string> failures)
+        {
+            if (!condition) failures.Add(MosCompatibilityName(mode) + ": " + message);
+        }
+
         private static XmlDocument ParseMosXml(string xml)
         {
             if (xml.IndexOf("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -1470,35 +1659,114 @@ namespace TcpPortDoctor
 
         private static string BuildHeartbeat(string mosId, string ncsId)
         {
+            return BuildHeartbeat(mosId, ncsId, MosCompatibilityMode.Mos40);
+        }
+
+        private static string BuildHeartbeat(string mosId, string ncsId, MosCompatibilityMode mode)
+        {
             string body = "  <heartbeat>\r\n" +
                 "    <time>" + MosTimeNow() + "</time>\r\n" +
                 "  </heartbeat>";
-            return BuildMosEnvelope(mosId, ncsId, NextMessageId(), body);
+            return BuildMosEnvelope(mosId, ncsId, UsesMessageId(mode) ? NextMessageId() : null, body);
         }
 
         private static string BuildReqMachInfo(string mosId, string ncsId)
         {
-            return BuildMosEnvelope(mosId, ncsId, NextMessageId(), "  <reqMachInfo />");
+            return BuildReqMachInfo(mosId, ncsId, MosCompatibilityMode.Mos40);
         }
 
-        private static string BuildListMachInfo(string mosId, string ncsId, Options options)
+        private static string BuildReqMachInfo(string mosId, string ncsId, MosCompatibilityMode mode)
+        {
+            return BuildMosEnvelope(mosId, ncsId, UsesMessageId(mode) ? NextMessageId() : null, "  <reqMachInfo />");
+        }
+
+        private static string BuildListMachInfo(string mosId, string ncsId, Options options, MosCompatibilityMode mode)
         {
             string machine = EscapeXml(Environment.MachineName);
-            string body = "  <listMachInfo>\r\n" +
-                "    <manufacturer>TestCompany</manufacturer>\r\n" +
+            StringBuilder body = new StringBuilder();
+            body.Append("  <listMachInfo>\r\n");
+            body.Append("    <manufacturer>TCP_DOCTOR</manufacturer>\r\n");
+            body.Append(
                 "    <model>TcpPortDoctor</model>\r\n" +
                 "    <hwRev></hwRev>\r\n" +
-                "    <swRev>1.1.0</swRev>\r\n" +
+                "    <swRev>1.2.0</swRev>\r\n" +
                 "    <DOM></DOM>\r\n" +
                 "    <SN>" + machine + "</SN>\r\n" +
                 "    <ID>" + EscapeXml(options.MosId) + "</ID>\r\n" +
                 "    <time>" + MosTimeNow() + "</time>\r\n" +
-                "    <mosRev>4.0</mosRev>\r\n" +
-                "    <supportedProfiles deviceType=\"" + EscapeXml(options.DeviceType) + "\">\r\n" +
-                "      <mosProfile number=\"0\">YES</mosProfile>\r\n" +
-                "    </supportedProfiles>\r\n" +
-                "  </listMachInfo>";
-            return BuildMosEnvelope(mosId, ncsId, NextMessageId(), body);
+                "    <mosRev>" + MosRevision(mode) + "</mosRev>\r\n");
+
+            if (IsLegacy28(mode))
+            {
+                int lastProfile = (mode == MosCompatibilityMode.Mos282 || mode == MosCompatibilityMode.Mos283) ? 7 : 6;
+                for (int profile = 0; profile <= lastProfile; profile++)
+                {
+                    body.Append("    <mosProfile").Append(profile).Append(">").Append(profile == 0 ? "YES" : "NO").Append("</mosProfile").Append(profile).Append(">\r\n");
+                }
+            }
+            else if (IsModern28(mode) || mode == MosCompatibilityMode.Mos40)
+            {
+                body.Append("    <supportedProfiles deviceType=\"").Append(EscapeXml(options.DeviceType)).Append("\">\r\n");
+                for (int profile = 0; profile <= 7; profile++)
+                {
+                    body.Append("      <mosProfile number=\"").Append(profile).Append("\">").Append(profile == 0 ? "YES" : "NO").Append("</mosProfile>\r\n");
+                }
+                body.Append("    </supportedProfiles>\r\n");
+            }
+
+            body.Append("  </listMachInfo>");
+            return BuildMosEnvelope(mosId, ncsId, UsesMessageId(mode) ? NextMessageId() : null, body.ToString());
+        }
+
+        private static bool UsesMessageId(MosCompatibilityMode mode)
+        {
+            return mode != MosCompatibilityMode.Mos26 && mode != MosCompatibilityMode.Mos280;
+        }
+
+        private static string MosRevision(MosCompatibilityMode mode)
+        {
+            if (mode == MosCompatibilityMode.Mos26) return "2.6";
+            if (mode == MosCompatibilityMode.Mos40) return "4.0";
+            if (mode == MosCompatibilityMode.Mos280) return "2.8";
+            if (mode == MosCompatibilityMode.Mos281) return "2.8.1";
+            if (mode == MosCompatibilityMode.Mos282) return "2.8.2";
+            if (mode == MosCompatibilityMode.Mos283) return "2.8.3";
+            if (mode == MosCompatibilityMode.Mos284) return "2.8.4";
+            return "2.8.5";
+        }
+
+        private static MosCompatibilityMode ResolveCompatibility(XmlDocument document, MosCompatibilityMode configured)
+        {
+            if (configured != MosCompatibilityMode.Auto) return configured;
+            if (document.SelectSingleNode("/mos/keepAlive") != null || document.SelectSingleNode("/mos/keepalive") != null)
+                return MosCompatibilityMode.Mos40;
+            if (document.SelectSingleNode("/mos/messageID") == null)
+                return MosCompatibilityMode.Mos26;
+            return MosCompatibilityMode.Mos285;
+        }
+
+        private static string MosCompatibilityName(MosCompatibilityMode mode)
+        {
+            if (mode == MosCompatibilityMode.Auto) return "automatico (2.6 sem messageID; 4.0 por keepAlive; demais 2.8 moderno)";
+            if (mode == MosCompatibilityMode.Mos26) return "MOS 2.6 socket";
+            if (mode == MosCompatibilityMode.Mos280) return "MOS 2.8.0 (perfis planos 0-6, sem messageID)";
+            if (mode == MosCompatibilityMode.Mos281) return "MOS 2.8.1 (perfis planos 0-6)";
+            if (mode == MosCompatibilityMode.Mos282) return "MOS 2.8.2 (perfis planos 0-7)";
+            if (mode == MosCompatibilityMode.Mos283) return "MOS 2.8.3 (perfis planos 0-7)";
+            if (mode == MosCompatibilityMode.Mos284) return "MOS 2.8.4 (supportedProfiles)";
+            if (mode == MosCompatibilityMode.Mos285) return "MOS 2.8.5 (supportedProfiles)";
+            return "MOS 4.0 socket";
+        }
+
+        private static bool IsLegacy28(MosCompatibilityMode mode)
+        {
+            return mode == MosCompatibilityMode.Mos280 || mode == MosCompatibilityMode.Mos281 ||
+                mode == MosCompatibilityMode.Mos282 || mode == MosCompatibilityMode.Mos283;
+        }
+
+        private static bool IsModern28(MosCompatibilityMode mode)
+        {
+            return mode == MosCompatibilityMode.Mos284 || mode == MosCompatibilityMode.Mos285;
         }
 
         private static string BuildMosEnvelope(string mosId, string ncsId, string messageId, string body)
