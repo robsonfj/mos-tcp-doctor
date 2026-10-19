@@ -1,0 +1,17 @@
+# Build output and packaged binaries
+dist/
+*.exe
+*.zip
+*.pdb
+
+# Diagnostic output may contain machine names, users, IPs and interfaces
+logs/
+*.log
+
+# IDE and operating-system files
+.vs/
+.vscode/
+*.user
+*.suo
+.DS_Store
+Thumbs.db

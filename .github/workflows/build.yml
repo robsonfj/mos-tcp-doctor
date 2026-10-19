@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build Windows executable
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Compile TcpPortDoctor
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Show executable checksum
+        shell: pwsh
+        run: Get-FileHash -Algorithm SHA256 ./dist/TcpPortDoctor.exe | Format-List
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: TcpPortDoctor-windows
+          path: |
+            dist/TcpPortDoctor.exe
+            README.md
+          if-no-files-found: error
+          retention-days: 30
