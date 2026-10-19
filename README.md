@@ -1,6 +1,6 @@
-# TcpPortDoctor
+# mos-tcp-doctor
 
-Utilitário de diagnóstico TCP e MOS Profile 0 para Windows. O executável usa por padrão as portas **10540, 10541 e 10542** e gera um log detalhado na pasta `logs` ao lado do `.exe` (ou na pasta temporária do usuário se não houver permissão de escrita).
+`mos-tcp-doctor` é um utilitário de diagnóstico TCP e MOS Profile 0 para Windows. O executável `TcpPortDoctor.exe` usa por padrão as portas **10540, 10541 e 10542** e gera um log detalhado na pasta `logs` ao lado do `.exe` (ou na pasta temporária do usuário se não houver permissão de escrita).
 
 O projeto é distribuído sob a licença MIT.
 
